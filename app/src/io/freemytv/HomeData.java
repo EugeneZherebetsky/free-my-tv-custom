@@ -51,8 +51,9 @@ final class HomeData {
     /**
      * Exchange rates (config fx=EUR,USD,RUB and fx_base=HUF): what one of each costs in the base currency, with the
      * change since the previous close. Live from Yahoo Finance (a pair it doesn't list, like RUB/HUF, through the
-     * dollar); if that fails, the day's rates from the free currency-api (two mirrors). No key. With them set, the
-     * quotes card shows these instead of crypto.
+     * dollar; Bitcoin, Ethereum and Solana as their dollar price times the dollar's); if that fails, the day's rates
+     * from the free currency-api (two mirrors). No key. With them set, the quotes card shows these instead of the
+     * crypto row.
      */
     static final String[] FX = fxList(Config.FX);
     static final String FX_BASE = Config.FX_BASE.trim().toUpperCase(Locale.ROOT);
@@ -64,6 +65,11 @@ final class HomeData {
             if (code.matches("[A-Z]{3}") && !out.contains(code) && out.size() < 4) out.add(code);
         }
         return out.toArray(new String[0]);
+    }
+
+    /** Coins among the FX codes (quoted against the dollar, drawn with their logo). */
+    static boolean isCoin(String code) {
+        return code.equals("BTC") || code.equals("ETH") || code.equals("SOL");
     }
 
     static boolean fxMode() {
@@ -295,11 +301,23 @@ final class HomeData {
         Map<String, double[]> seen = new HashMap<>();
         JSONArray r = new JSONArray(), ch = new JSONArray();
         long time = Long.MAX_VALUE;
+        double[] one = {1, 1, System.currentTimeMillis()};
         for (String code : FX) {
-            double[] q = code.equals(FX_BASE) ? new double[] {1, 1, System.currentTimeMillis()} : yahoo(code + FX_BASE, seen);
+            double[] q;
+            if (code.equals(FX_BASE)) {
+                q = one;
+            } else if (isCoin(code)) {
+                // BTC in forints: BTC-USD × USD/HUF (prices and previous closes alike).
+                double[] coin = yahoo(code + "-USD", seen);
+                double[] usd = FX_BASE.equals("USD") ? one : yahoo("USD" + FX_BASE + "=X", seen);
+                if (coin == null || usd == null) throw new IOException("no quote for " + code + "/" + FX_BASE);
+                q = new double[] {coin[0] * usd[0], coin[1] * usd[1], Math.min(coin[2], usd[2])};
+            } else {
+                q = yahoo(code + FX_BASE + "=X", seen);
+            }
             if (q == null) {
-                double[] base = FX_BASE.equals("USD") ? new double[] {1, 1, System.currentTimeMillis()} : yahoo("USD" + FX_BASE, seen);
-                double[] other = yahoo("USD" + code, seen);
+                double[] base = FX_BASE.equals("USD") ? one : yahoo("USD" + FX_BASE + "=X", seen);
+                double[] other = yahoo("USD" + code + "=X", seen);
                 if (base == null || other == null) throw new IOException("no quote for " + code + "/" + FX_BASE);
                 q = new double[] {base[0] / other[0], base[1] / other[1], Math.min(base[2], other[2])};
             }
@@ -310,12 +328,12 @@ final class HomeData {
         return new JSONObject().put("r", r).put("c", ch).put("time", time == Long.MAX_VALUE ? 0 : time);
     }
 
-    /** Yahoo Finance quote for "EURHUF": {price, previous close, time (ms)}, or null if Yahoo doesn't list it. */
+    /** Yahoo Finance quote ("EURHUF=X", "BTC-USD"): {price, previous close, time (ms)}, or null if Yahoo doesn't list it. */
     private static double[] yahoo(String pair, Map<String, double[]> seen) throws Exception {
         if (seen.containsKey(pair)) return seen.get(pair);
         IOException last = null;
         for (String host : new String[] {"query1", "query2"}) {
-            String url = "https://" + host + ".finance.yahoo.com/v8/finance/chart/" + pair + "=X?range=1d&interval=1d";
+            String url = "https://" + host + ".finance.yahoo.com/v8/finance/chart/" + pair + "?range=1d&interval=1d";
             try {
                 JSONObject meta = new JSONObject(get(url, "Mozilla/5.0 (Linux; Android 11) FreeMyTV"))
                         .getJSONObject("chart").getJSONArray("result").getJSONObject(0).getJSONObject("meta");
@@ -529,6 +547,9 @@ final class HomeData {
             case "RUB": return Ui.tr("Rublo", "Russian Ruble", "Rublo");
             case "GBP": return Ui.tr("Libra", "British Pound", "Libra");
             case "CHF": return Ui.tr("Franco suíço", "Swiss Franc", "Franco suizo");
+            case "BTC": return "Bitcoin";
+            case "ETH": return "Ethereum";
+            case "SOL": return "Solana";
             default: return code;
         }
     }

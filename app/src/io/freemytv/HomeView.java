@@ -1429,7 +1429,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             fill.setShader(null);
             fill.setColor(tone(0x14000000, 0x29FFFFFF));
             c.drawCircle(x + br, mid, br, fill);
-            c.drawText(HomeData.fxSymbol(code), x + br, mid + Ui.halfCap(fxBadge), fxBadge);
+            if (HomeData.isCoin(code)) Glyphs.coin(getContext(), c, code, x + br, mid, cap * 0.95f, fxBadge.getColor());
+            else c.drawText(HomeData.fxSymbol(code), x + br, mid + Ui.halfCap(fxBadge), fxBadge);
             float tx = x + 2 * br + 16 * k;
             c.drawText(code, tx, base, cardText);
             c.drawText(HomeData.fxName(code), tx + cardText.measureText(code) + 14 * k, base, cardDim);

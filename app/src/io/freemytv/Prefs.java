@@ -98,19 +98,27 @@ final class Prefs {
         if (v == null) return null;
         List<String> out = new ArrayList<>();
         for (String p : v.split(",")) if (!p.isEmpty()) out.add(p);
-        // Once: YouTube Music joins a shelf edited before it was offered (right after YouTube, if it's there).
-        if (!sp().getBoolean("ytmusicOffered", false)) {
-            sp().edit().putBoolean("ytmusicOffered", true).apply();
-            if (!out.contains(YT_MUSIC) && out.size() < HomeApps.MAX_SHELF) {
-                int at = out.indexOf("com.google.android.youtube.tv");
-                out.add(at >= 0 ? at + 1 : out.size(), YT_MUSIC);
-                setShelf(out);
+        // Once per app: these join a shelf edited before they were offered (YouTube Music right after YouTube, the
+        // others at the end), as soon as they're installed. Taken off the shelf later, they stay off.
+        boolean changed = false;
+        for (String pkg : ADD_ONCE) {
+            String flag = pkg.equals(YT_MUSIC) ? "ytmusicOffered" : "offered:" + pkg;
+            if (sp().getBoolean(flag, false)) continue;
+            if (!out.contains(pkg)) {
+                if (out.size() >= HomeApps.MAX_SHELF || HomeApps.launchIntent(app.getPackageManager(), pkg) == null) continue;
+                int at = pkg.equals(YT_MUSIC) ? out.indexOf("com.google.android.youtube.tv") : -1;
+                out.add(at >= 0 ? at + 1 : out.size(), pkg);
+                changed = true;
             }
+            sp().edit().putBoolean(flag, true).apply();
         }
+        if (changed) setShelf(out);
         return out;
     }
 
     private static final String YT_MUSIC = "com.google.android.youtube.tvmusic";
+    /** YouTube Music, VLC, Plex and BiglyBT (torrents). */
+    private static final String[] ADD_ONCE = {YT_MUSIC, "org.videolan.vlc", "com.plexapp.android", "com.biglybt.android.client"};
 
     static void setShelf(List<String> packages) {
         StringBuilder sb = new StringBuilder();
