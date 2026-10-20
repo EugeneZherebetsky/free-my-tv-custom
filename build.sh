@@ -61,6 +61,7 @@ final class Config {
     static final boolean SHOW_CRYPTO = $CRYPTO;
     static final String FX = "$(prop fx '')";
     static final String FX_BASE = "$(prop fx_base USD)";
+    static final String SCREENSAVER = "$(prop screensaver free)";
 }
 EOF
 

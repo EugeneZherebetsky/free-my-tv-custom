@@ -1415,8 +1415,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         drawerCard(c, r);
         float x = r.left + 34 * k, right = r.right - 34 * k;
         c.drawText(Ui.tr("Câmbio", "Exchange Rates", "Tipos de cambio"), x, r.top + 54 * k, cardTitle);
-        String stale = HomeData.staleness(data.fxAt, 3 * 3600_000L);
-        String day = data.fxDate.isEmpty() ? HomeData.FX_BASE : HomeData.FX_BASE + " · " + HomeData.fxDay(data.fxDate);
+        // Live: the quotes' time; the daily backup: its date.
+        String stale = HomeData.staleness(data.fxAt, data.fxTime > 0 ? 5 * 60_000L : 3 * 3600_000L);
+        String day = data.fxTime > 0 ? HomeData.FX_BASE + " · " + Ui.time(data.fxTime)
+                : data.fxDate.isEmpty() ? HomeData.FX_BASE : HomeData.FX_BASE + " · " + HomeData.fxDay(data.fxDate);
         c.drawText(stale.isEmpty() ? day : Ui.tr("de ", "", "de ") + stale, right, r.top + 54 * k, cardDimRight);
         float cap = Ui.cap(cardText), br = 18 * k;
         int[] list = HomeData.fxActive();

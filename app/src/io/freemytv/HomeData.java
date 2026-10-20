@@ -17,7 +17,9 @@ import java.nio.charset.StandardCharsets;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutorService;
@@ -44,11 +46,12 @@ final class HomeData {
     private static String weatherUrl() {
         return "https://api.open-meteo.com/v1/forecast?latitude=" + Prefs.latitude() + "&longitude=" + Prefs.longitude() + WEATHER_QUERY;
     }
-    private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L, FX_EVERY = 60 * 60_000L;
+    private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L, FX_EVERY = 5 * 60_000L;
 
     /**
      * Exchange rates (config fx=EUR,USD,RUB and fx_base=HUF): what one of each costs in the base currency, with the
-     * change since the day before. Daily rates from the free currency-api (two mirrors), no key. With them set, the
+     * change since the previous close. Live from Yahoo Finance (a pair it doesn't list, like RUB/HUF, through the
+     * dollar); if that fails, the day's rates from the free currency-api (two mirrors). No key. With them set, the
      * quotes card shows these instead of crypto.
      */
     static final String[] FX = fxList(Config.FX);
@@ -151,6 +154,8 @@ final class HomeData {
     /** Price of one of each FX currency in FX_BASE, and its change (%) since the day before. */
     final double[] fxRates = new double[FX.length], fxChanges = new double[FX.length];
     volatile String fxDate = "";
+    /** When the live quotes were made (0 = daily rates, shown with their date). */
+    volatile long fxTime;
     volatile Weather weather = new Weather();
 
     private final SharedPreferences cache;
@@ -165,8 +170,10 @@ final class HomeData {
         java.util.Arrays.fill(fxChanges, Double.NaN);
         try {
             if (fxMode() && FX_BASE.equals(cache.getString("fxBase", ""))) {
+                String live = cache.getString("fxLive", null);
                 String now = cache.getString("fx", null);
-                if (now != null) parseFx(now, cache.getString("fxPrev", null));
+                if (live != null) readLive(new JSONObject(live));
+                else if (now != null) parseFx(now, cache.getString("fxPrev", null));
                 fxAt = cache.getLong("fxAt", 0);
             }
             if (Prefs.quotes()) {
@@ -210,6 +217,16 @@ final class HomeData {
             fetchingFx = true;
             io.execute(() -> {
                 try {
+                    try {
+                        JSONObject live = liveFx();
+                        readLive(live);
+                        fxAt = System.currentTimeMillis();
+                        cache.edit().putString("fxLive", live.toString()).putString("fxBase", FX_BASE).putLong("fxAt", fxAt).apply();
+                        notifyListeners();
+                        return;
+                    } catch (Exception e) {
+                        AppLog.w("live rates: " + e.getMessage());
+                    }
                     String latest = getFirst(fxUrls("latest", FX_BASE));
                     String prev = null;
                     try {
@@ -219,7 +236,7 @@ final class HomeData {
                     }
                     parseFx(latest, prev);
                     fxAt = System.currentTimeMillis();
-                    cache.edit().putString("fx", latest).putString("fxPrev", prev).putString("fxBase", FX_BASE)
+                    cache.edit().putString("fx", latest).putString("fxPrev", prev).remove("fxLive").putString("fxBase", FX_BASE)
                             .putLong("fxAt", fxAt).apply();
                     notifyListeners();
                 } catch (Exception e) {
@@ -270,6 +287,64 @@ final class HomeData {
         if (found == 0) pricesAt = 0;   // cached in another currency (config changed): fetch again
     }
 
+    /**
+     * Live quotes for every FX currency: {"r": [price…], "c": [change %…], "time": epoch ms}. A pair Yahoo doesn't
+     * list (RUB/HUF) goes through the dollar: USD/HUF ÷ USD/RUB, for the price and for the previous close.
+     */
+    private static JSONObject liveFx() throws Exception {
+        Map<String, double[]> seen = new HashMap<>();
+        JSONArray r = new JSONArray(), ch = new JSONArray();
+        long time = Long.MAX_VALUE;
+        for (String code : FX) {
+            double[] q = code.equals(FX_BASE) ? new double[] {1, 1, System.currentTimeMillis()} : yahoo(code + FX_BASE, seen);
+            if (q == null) {
+                double[] base = FX_BASE.equals("USD") ? new double[] {1, 1, System.currentTimeMillis()} : yahoo("USD" + FX_BASE, seen);
+                double[] other = yahoo("USD" + code, seen);
+                if (base == null || other == null) throw new IOException("no quote for " + code + "/" + FX_BASE);
+                q = new double[] {base[0] / other[0], base[1] / other[1], Math.min(base[2], other[2])};
+            }
+            r.put(q[0]);
+            ch.put(q[1] > 0 ? (q[0] - q[1]) / q[1] * 100 : Double.NaN);
+            time = Math.min(time, (long) q[2]);
+        }
+        return new JSONObject().put("r", r).put("c", ch).put("time", time == Long.MAX_VALUE ? 0 : time);
+    }
+
+    /** Yahoo Finance quote for "EURHUF": {price, previous close, time (ms)}, or null if Yahoo doesn't list it. */
+    private static double[] yahoo(String pair, Map<String, double[]> seen) throws Exception {
+        if (seen.containsKey(pair)) return seen.get(pair);
+        IOException last = null;
+        for (String host : new String[] {"query1", "query2"}) {
+            String url = "https://" + host + ".finance.yahoo.com/v8/finance/chart/" + pair + "=X?range=1d&interval=1d";
+            try {
+                JSONObject meta = new JSONObject(get(url, "Mozilla/5.0 (Linux; Android 11) FreeMyTV"))
+                        .getJSONObject("chart").getJSONArray("result").getJSONObject(0).getJSONObject("meta");
+                double price = meta.getDouble("regularMarketPrice");
+                double prev = meta.optDouble("chartPreviousClose", meta.optDouble("previousClose", Double.NaN));
+                double[] q = {price, prev, meta.optLong("regularMarketTime") * 1000.0};
+                seen.put(pair, q);
+                return q;
+            } catch (IOException e) {
+                if (String.valueOf(e.getMessage()).contains("HTTP 404")) {
+                    seen.put(pair, null);
+                    return null;
+                }
+                last = e;
+            }
+        }
+        throw last;
+    }
+
+    private void readLive(JSONObject o) {
+        JSONArray r = o.optJSONArray("r"), ch = o.optJSONArray("c");
+        for (int i = 0; i < FX.length; i++) {
+            fxRates[i] = r != null && i < r.length() ? r.optDouble(i, Double.NaN) : Double.NaN;
+            fxChanges[i] = ch != null && i < ch.length() ? ch.optDouble(i, Double.NaN) : Double.NaN;
+        }
+        fxTime = o.optLong("time");
+        fxDate = "";
+    }
+
     /** currency-api gives what one base unit buys; the card shows the other way round (one euro in forints). */
     private void parseFx(String latest, String prev) throws Exception {
         String base = FX_BASE.toLowerCase(Locale.ROOT);
@@ -288,6 +363,7 @@ final class HomeData {
             fxChanges[i] = was > 0 && !Double.isNaN(fxRates[i]) ? (fxRates[i] - was) / was * 100 : Double.NaN;
         }
         fxDate = now.optString("date", "");
+        fxTime = 0;
     }
 
     /** "2026-10-19" → "2026-10-18". */
@@ -349,10 +425,14 @@ final class HomeData {
     }
 
     private static String get(String url) throws IOException {
+        return get(url, "FreeMyTV");
+    }
+
+    private static String get(String url, String userAgent) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setConnectTimeout(6000);
         c.setReadTimeout(6000);
-        c.setRequestProperty("User-Agent", "FreeMyTV");
+        c.setRequestProperty("User-Agent", userAgent);
         try {
             if (c.getResponseCode() != 200) throw new IOException("HTTP " + c.getResponseCode());
             try (InputStream in = c.getInputStream()) {

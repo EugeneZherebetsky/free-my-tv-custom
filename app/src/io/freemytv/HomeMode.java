@@ -384,8 +384,16 @@ final class HomeMode {
                     adb.shell("cmd package set-home-activity " + HOME_ACTIVITY);
                     fixed.add(Ui.tr("o Início", "the home screen"));
                 }
-                // With the TV's own screensaver, whatever is picked in the TV's settings stays.
-                if (!tvDream && !adb.shell("settings get secure screensaver_components").contains(DREAM)) {
+                // With the TV's own screensaver, whatever is picked in the TV's settings stays; only ours is replaced
+                // (the TV's own was chosen, or is this build's default, while ours was on).
+                String dreamNow = adb.shell("settings get secure screensaver_components");
+                if (tvDream && dreamNow.contains(PKG + "/")) {
+                    restoreDream(adb, s.optString("originalDreamSetting", ""));
+                    notice(app, Ui.tr("Tela de descanso: a da TV (Google Fotos, modo Ambiente).",
+                            "Screensaver: the TV's own (Google Photos, Ambient mode).",
+                            "Protector de pantalla: el del TV (Google Fotos, modo Ambiente)."));
+                }
+                if (!tvDream && !dreamNow.contains(DREAM)) {
                     adb.shell("settings put secure screensaver_components " + DREAM);
                     fixed.add(Ui.tr("a tela de descanso", "the screensaver"));
                 }
@@ -412,8 +420,9 @@ final class HomeMode {
         ModeJob.schedule(c, ModeJob.DREAM, choice, 0);
     }
 
+    /** The TV's own screensaver: chosen on the TV, or (until then) screensaver=tv in config.properties. */
     static boolean tvDream(JSONObject s) {
-        return DREAM_TV.equals(s.optString("dream"));
+        return DREAM_TV.equals(s.optString("dream", "tv".equalsIgnoreCase(Config.SCREENSAVER.trim()) ? DREAM_TV : DREAM_FREE));
     }
 
     /**
