@@ -660,8 +660,8 @@ public class SettingsActivity extends Activity {
         // MARK: - Home Settings and Remote Buttons
 
         private static final String[] LANGUAGES = {"auto", "pt", "en", "es"}, UNITS = {"auto", "C", "F"}, THEMES = {"auto", "light", "dark"};
-        /** Home Settings: language, temperature, theme, weather, quotes, then one row per coin. */
-        private static final int COIN_ROWS = 5;
+        /** Home Settings: language, temperature, theme, wallpaper, weather, quotes, then one row per coin. */
+        private static final int COIN_ROWS = 6;
 
         private boolean dollar() {
             return "BRL".equalsIgnoreCase(Config.CURRENCY.trim());
@@ -672,6 +672,7 @@ public class SettingsActivity extends Activity {
             l.add(Ui.tr("Idioma", "Language"));
             l.add(Ui.tr("Temperatura", "Temperature"));
             l.add(Ui.tr("Tema", "Theme"));
+            l.add(Ui.tr("Papel de parede", "Wallpaper", "Fondo de pantalla"));
             l.add(Ui.tr("Widget do clima", "Weather widget"));
             l.add(Ui.tr("Widget de cotações", "Quotes widget"));
             if (HomeData.fxMode()) {
@@ -694,8 +695,9 @@ public class SettingsActivity extends Activity {
             v[1] = unit.equals("C") ? "°C" : unit.equals("F") ? "°F" : Ui.tr("Automática", "Automatic");
             String theme = Prefs.theme();
             v[2] = theme.equals("light") ? Ui.tr("Claro", "Light") : theme.equals("dark") ? Ui.tr("Escuro", "Dark") : Ui.tr("Automático", "Automatic");
-            v[3] = onOff(Prefs.weather());
-            v[4] = onOff(Prefs.quotes());
+            v[3] = Wallpapers.name(Prefs.wallpaper());
+            v[4] = onOff(Prefs.weather());
+            v[5] = onOff(Prefs.quotes());
             // No quotes widget, nowhere to show prices: the coins read as off (and stay locked) until it is back on.
             for (int i = COIN_ROWS; i < v.length; i++) {
                 int at = i - COIN_ROWS;
@@ -769,8 +771,14 @@ public class SettingsActivity extends Activity {
                     Prefs.setTheme(THEMES[(at + dir + THEMES.length) % THEMES.length]);
                     break;
                 }
-                case 3: Prefs.setWeather(!Prefs.weather()); break;
-                case 4: Prefs.setQuotes(!Prefs.quotes()); break;
+                case 3: {
+                    List<String> walls = Wallpapers.ids(getContext());
+                    int at = walls.indexOf(Prefs.wallpaper());
+                    Prefs.setWallpaper(walls.get(((at < 0 ? 0 : at) + dir + walls.size()) % walls.size()));
+                    break;
+                }
+                case 4: Prefs.setWeather(!Prefs.weather()); break;
+                case 5: Prefs.setQuotes(!Prefs.quotes()); break;
                 default:
                     if (!Prefs.quotes()) return;
                     int at = focus - COIN_ROWS;

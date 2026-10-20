@@ -69,6 +69,14 @@ final class Prefs {
 
     static void setTheme(String v) { put("theme", v); }
 
+    /** The wallpaper (Wallpapers): "picks", "plain" or an image's file name. */
+    static String wallpaper() {
+        String first = Config.WALLPAPER.trim();
+        return sp().getString("wallpaper", first.isEmpty() ? Wallpapers.PICKS : first);
+    }
+
+    static void setWallpaper(String v) { put("wallpaper", v); }
+
     // MARK: - City (from config.properties)
 
     static String city() { return Config.CITY.trim(); }

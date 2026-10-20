@@ -9,3 +9,7 @@ out/
 
 # macOS
 .DS_Store
+
+# Your own wallpapers (see app/assets/wallpapers/README.md)
+app/assets/wallpapers/*
+!app/assets/wallpapers/README.md

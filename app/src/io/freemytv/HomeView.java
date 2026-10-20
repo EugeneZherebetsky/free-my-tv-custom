@@ -121,6 +121,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final int[] glassNight = new int[Backdrop.GW * Backdrop.GH], frostNight = new int[Backdrop.FW * Backdrop.FH];
     private final int[] neutralGlassPx = new int[Backdrop.GW * Backdrop.GH], neutralFrostPx = new int[Backdrop.FW * Backdrop.FH];
     private boolean nightPair;          // the glass holds both photos (day and night), blended by `night`
+    // Wallpaper (Home Settings): an image instead of the top pick's photo, its frosted versions for the glass, and
+    // whether it's dark (then the home screen keeps its dark look).
+    private Bitmap wallImage;
+    private int[] wallFrost, wallGlass;
+    private boolean wallDark;
+    private String wallLoaded = "";
     private Shader nightGradient;
 
     // At the top: tabs (0 to 2) and icon-only buttons (3 to 5); the three cards
@@ -296,6 +302,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         recs = Recs.get(a);
         click = new Click(a);
         ui = a.getSharedPreferences("home-ui", Context.MODE_PRIVATE);
+        // Known from the last time this wallpaper was shown, so the first frame already has the right look.
+        wallDark = Wallpapers.isImage(Prefs.wallpaper()) && ui.getBoolean("wallDark:" + Prefs.wallpaper(), false);
         tvInputs = (TvInputManager) a.getSystemService(Context.TV_INPUT_SERVICE);
         setFocusable(true);
         sky = new Layer(a, SKY);
@@ -484,7 +492,49 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         hero = null;
         heroFrom = null;
         updatePicks();
+        wallLoaded = "";
+        loadWallpaper();
         motionDirty = true;
+    }
+
+    /** Loads the chosen wallpaper image in the background (nothing to load for "picks" and "plain"). */
+    private void loadWallpaper() {
+        final String id = Prefs.wallpaper();
+        if (id.equals(wallLoaded) || w == 0) return;
+        wallLoaded = id;
+        if (!Wallpapers.isImage(id)) {
+            setWall(id, null, null, null, false);
+            return;
+        }
+        final Context c = getContext().getApplicationContext();
+        final int ww = w, hh = h;
+        LOADER.execute(() -> {
+            Bitmap b = Wallpapers.load(c, id, ww, hh);
+            int[] frost = b == null ? null : Wallpapers.pixels(b, Backdrop.FW, Backdrop.FH);
+            int[] glass = b == null ? null : Wallpapers.pixels(b, Backdrop.GW, Backdrop.GH);
+            boolean dark = frost != null && Wallpapers.isDark(frost);
+            handler.post(() -> setWall(id, b, frost, glass, dark));
+        });
+    }
+
+    private void setWall(String id, Bitmap b, int[] frost, int[] glass, boolean dark) {
+        if (!id.equals(wallLoaded)) return;   // another one was picked meanwhile
+        wallImage = b;
+        wallFrost = frost;
+        wallGlass = glass;
+        wallDark = dark;
+        if (b != null) {
+            ui.edit().putBoolean("wallDark:" + id, dark).apply();
+            bgFrom = bgTo = null;
+            bgFadeAt = 0;
+            neutralGlass();
+        } else {
+            updateCards();
+        }
+        checkNight(true);
+        sky.invalidate();
+        platter.invalidate();
+        heroDirty = statusDirty = drawerDirty = tilesDirty = true;
     }
 
     private void makePaints() {
@@ -759,8 +809,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         return glassNight;
     }
 
-    /** No photo: the glass reads the background's own gray (not Scene's default aurora, which isn't on screen). */
+    /** No photo: the glass reads the wallpaper, or the background's own gray (not Scene's default aurora). */
     private void neutralGlass() {
+        if (wallFrost != null) {
+            scene.setFrost(wallFrost);
+            scene.setGlassImage(wallGlass);
+            nightPair = false;
+            return;
+        }
         int color = blend(0xFFEBEBF0, 0xFF141416, night);
         java.util.Arrays.fill(neutralFrostPx, color);
         java.util.Arrays.fill(neutralGlassPx, color);
@@ -782,7 +838,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** Day or night right now (from the sun at your location); `animate`: with the transition. */
     private void checkNight(boolean animate) {
-        boolean want = data.isNight(System.currentTimeMillis());
+        boolean want = wallDark || data.isNight(System.currentTimeMillis());
         if (want == nightTarget) return;
         nightTarget = want;
         if (animate && running) {
@@ -2144,7 +2200,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         for (Recs.Pick p : recs.wanted()) recs.backdrop(p);   // all three tabs preloaded: switching tabs is instant
         Backdrop b = cards.isEmpty() ? null : recs.backdrop(cards.get(0));
-        if (cards.isEmpty() || b != null) showBackdrop(b);
+        // The background follows the picks only with the "picks" wallpaper; an image wallpaper stays.
+        String wall = Prefs.wallpaper();
+        if (wall.equals(Wallpapers.PICKS)) {
+            if (cards.isEmpty() || b != null) showBackdrop(b);
+        } else if (!Wallpapers.isImage(wall) || wallImage == null) {
+            showBackdrop(null);
+        }
         drawerDirty = true;
         spoken.focusMoved();    // new picks under the focused card
     }
@@ -2166,6 +2228,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean fading = bgFadeAt != 0;
         // Drawer open: the background lightens (by day) or darkens (at night), as a filter on the drawing itself.
         android.graphics.ColorFilter v = veil(tone(0.32f, 0.42f) * Ui.clamp(drawer.value), blend(0xFFFFFFFF, 0xFF000000, night));
+        if (wallImage != null) {
+            imagePaint.setColorFilter(v);
+            drawImage(c, wallImage, 1);
+            imagePaint.setColorFilter(null);
+            // A light image at night: dimmed, so the white text reads.
+            if (!wallDark && night > 0.001f) {
+                fill.setShader(null);
+                fill.setColor(Ui.alpha(0xFF000000, 0.55f * night));
+                c.drawRect(screen, fill);
+            }
+            return;
+        }
         if (bgTo == null || (fading && bgFrom == null)) {
             if (lightGradient == null) lightGradient = new LinearGradient(0, 0, 0, h, 0xFFF5F5F7, 0xFFE2E2E7, Shader.TileMode.CLAMP);
             if (nightGradient == null) nightGradient = new LinearGradient(0, 0, 0, h, 0xFF1C1C1E, 0xFF0B0B0D, Shader.TileMode.CLAMP);

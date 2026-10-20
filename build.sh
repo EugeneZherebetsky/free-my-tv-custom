@@ -62,6 +62,7 @@ final class Config {
     static final String FX = "$(prop fx '')";
     static final String FX_BASE = "$(prop fx_base USD)";
     static final String SCREENSAVER = "$(prop screensaver free)";
+    static final String WALLPAPER = "$(prop wallpaper picks)";
 }
 EOF
 
