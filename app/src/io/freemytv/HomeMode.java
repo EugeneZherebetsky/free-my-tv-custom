@@ -36,7 +36,8 @@ final class HomeMode {
     static final String PKG = "io.freemytv";
     static final String HOME_ACTIVITY = PKG + "/" + PKG + ".HomeActivity";
     static final String SETTINGS_ACTIVITY = PKG + "/" + PKG + ".SettingsActivity";
-    static final String DREAM = PKG + "/" + PKG + ".Screensaver";
+    /** Our screensaver: on Android 11 the copy in the main process (see Screensaver11). */
+    static final String DREAM = PKG + "/" + PKG + (Build.VERSION.SDK_INT >= 31 ? ".Screensaver" : ".Screensaver11");
     static final String FREE = "free", ORIGINAL = "original";
     /** Screensaver in Free My TV mode ("dream" in the state): ours, or the TV's own (Google Photos, Ambient mode). */
     static final String DREAM_FREE = "free", DREAM_TV = "tv";
@@ -51,7 +52,7 @@ final class HomeMode {
      * your brand's, see the README). The TV's own home screen and screensaver are added at switch time.
      */
     static final String[] DEBLOAT = {
-        "com.google.android.play.games", "com.google.android.youtube.tvmusic",        // Play Games, YouTube Music
+        "com.google.android.play.games",                                              // Play Games
         // TCL
         "com.tcl.magiconnectfree", "com.tcl.miracast",                                // screen mirroring apps
         "com.tcl.waterfall.overseas", "com.tcl.channelplus",                          // TCL Channel and its Live TV
@@ -352,12 +353,22 @@ final class HomeMode {
                 Set<String> owners = wifiOwners(adb);
                 boolean reverted = s.optBoolean("homeReverted");
                 String home = originalHome(s);
-                Set<String> wanted = new HashSet<>(stringList(s, "disabled"));
+                Set<String> wanted = new HashSet<>();
                 boolean tvDream = tvDream(s);
                 for (String pkg : targets(home, tvDream ? "" : s.optString("originalDream", ""))) {
                     if (!reverted || !(pkg.equals(packageOf(home)) || pkg.equals(GOOGLE_SETUP))) wanted.add(pkg);
                 }
                 Set<String> disabled = new HashSet<>(stringList(s, "disabled"));
+                // Apps this version no longer turns off (taken off the lists, like YouTube Music): back on.
+                List<String> back = new ArrayList<>();
+                for (String pkg : sorted(new HashSet<>(disabled))) {
+                    if (wanted.contains(pkg) || reverted && (pkg.equals(packageOf(home)) || pkg.equals(GOOGLE_SETUP))) continue;
+                    if (!disabledNow.contains(pkg) || adb.shell("pm enable " + pkg).contains("new state: enabled")) {
+                        disabled.remove(pkg);
+                        if (disabledNow.contains(pkg)) back.add(pkg);
+                    }
+                }
+                if (!back.isEmpty()) notice(app, Ui.tr("Religuei: ", "Turned back on: ", "Reactivé: ") + String.join(", ", back) + ".");
                 for (String pkg : sorted(wanted)) {
                     if (PROTECTED.contains(pkg) || !present.contains(pkg) || owners.contains(pkg)) continue;
                     if (disabledNow.contains(pkg)) {

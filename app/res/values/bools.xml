@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Which copy of the screensaver is on (see the manifest): Android 11 needs it in the main process. -->
+    <bool name="dream_in_home_process">false</bool>
+    <bool name="dream_in_main_process">true</bool>
+</resources>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="dream_in_home_process">true</bool>
+    <bool name="dream_in_main_process">false</bool>
+</resources>

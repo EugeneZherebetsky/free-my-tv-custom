@@ -674,10 +674,14 @@ public class SettingsActivity extends Activity {
             l.add(Ui.tr("Tema", "Theme"));
             l.add(Ui.tr("Widget do clima", "Weather widget"));
             l.add(Ui.tr("Widget de cotações", "Quotes widget"));
-            l.add("Bitcoin");
-            l.add("Ethereum");
-            l.add("Solana");
-            if (dollar()) l.add(Ui.tr("Dólar", "Dollar"));
+            if (HomeData.fxMode()) {
+                for (String code : HomeData.FX) l.add(code + " → " + HomeData.FX_BASE);
+            } else {
+                l.add("Bitcoin");
+                l.add("Ethereum");
+                l.add("Solana");
+                if (dollar()) l.add(Ui.tr("Dólar", "Dollar"));
+            }
             return l.toArray(new String[0]);
         }
 
@@ -693,7 +697,10 @@ public class SettingsActivity extends Activity {
             v[3] = onOff(Prefs.weather());
             v[4] = onOff(Prefs.quotes());
             // No quotes widget, nowhere to show prices: the coins read as off (and stay locked) until it is back on.
-            for (int i = COIN_ROWS; i < v.length; i++) v[i] = onOff(Prefs.quotes() && Prefs.coin(i - COIN_ROWS));
+            for (int i = COIN_ROWS; i < v.length; i++) {
+                int at = i - COIN_ROWS;
+                v[i] = onOff(Prefs.quotes() && (HomeData.fxMode() ? Prefs.fx(at) : Prefs.coin(at)));
+            }
             return v;
         }
 
@@ -766,7 +773,9 @@ public class SettingsActivity extends Activity {
                 case 4: Prefs.setQuotes(!Prefs.quotes()); break;
                 default:
                     if (!Prefs.quotes()) return;
-                    Prefs.setCoin(focus - COIN_ROWS, !Prefs.coin(focus - COIN_ROWS));
+                    int at = focus - COIN_ROWS;
+                    if (HomeData.fxMode()) Prefs.setFx(at, !Prefs.fx(at));
+                    else Prefs.setCoin(at, !Prefs.coin(at));
                     break;
             }
             HomeData.get(getContext()).settingsChanged();

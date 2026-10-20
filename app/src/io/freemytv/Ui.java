@@ -26,12 +26,16 @@ final class Ui {
     /** English, Portuguese or Spanish, from the settings or, with "auto", the TV's own language. */
     static volatile String language = language();
     static volatile boolean en = "en".equals(language), es = "es".equals(language);
+    /** The TV's clock setting (24-hour or not) and whether it writes dates the US way; read in init. */
+    static volatile boolean h24, usDate = true;
     static Typeface thin, light, displayMedium, displaySemibold, regular, medium, semibold;
     private static boolean loaded;
     private static final Rect BOUNDS = new Rect();
     private static final RectF OVAL = new RectF();
 
     static synchronized void init(Context c) {
+        h24 = android.text.format.DateFormat.is24HourFormat(c);
+        usDate = "US".equals(Locale.getDefault().getCountry());
         if (loaded) return;
         loaded = true;
         AssetManager a = c.getAssets();
@@ -146,21 +150,21 @@ final class Ui {
         return "es".equals(tv.getLanguage()) ? tv : new Locale("es", "ES");
     }
 
-    /** "21:47" (in English, "9:47", like the iPhone in the US). */
+    /** "21:47" (in English with a 12-hour TV clock, "9:47", like the iPhone in the US). */
     static String clock(long now) {
-        return en ? new SimpleDateFormat("h:mm", Locale.US).format(new Date(now))
+        return en ? new SimpleDateFormat(h24 ? "H:mm" : "h:mm", Locale.US).format(new Date(now))
                 : new SimpleDateFormat("HH:mm", locale()).format(new Date(now));
     }
 
     /** "5:21" (sunrise and sunset; in English, "5:21 AM"). */
     static String time(long at) {
-        return en ? new SimpleDateFormat("h:mm a", Locale.US).format(new Date(at))
+        return en ? new SimpleDateFormat(h24 ? "H:mm" : "h:mm a", Locale.US).format(new Date(at))
                 : new SimpleDateFormat("H:mm", locale()).format(new Date(at));
     }
 
     /** "domingo, 18 de outubro" (lowercase, like the iPhone in Portuguese); "Sunday, October 18" in English. */
     static String date(long now) {
-        return en ? new SimpleDateFormat("EEEE, MMMM d", Locale.US).format(new Date(now))
+        return en ? new SimpleDateFormat(usDate ? "EEEE, MMMM d" : "EEEE, d MMMM", Locale.US).format(new Date(now))
                 : new SimpleDateFormat("EEEE, d 'de' MMMM", locale()).format(new Date(now));
     }
 

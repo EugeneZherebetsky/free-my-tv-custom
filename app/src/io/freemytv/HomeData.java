@@ -44,12 +44,51 @@ final class HomeData {
     private static String weatherUrl() {
         return "https://api.open-meteo.com/v1/forecast?latitude=" + Prefs.latitude() + "&longitude=" + Prefs.longitude() + WEATHER_QUERY;
     }
-    private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L;
+    private static final long PRICES_EVERY = 5 * 60_000L, WEATHER_EVERY = 30 * 60_000L, FX_EVERY = 60 * 60_000L;
+
+    /**
+     * Exchange rates (config fx=EUR,USD,RUB and fx_base=HUF): what one of each costs in the base currency, with the
+     * change since the day before. Daily rates from the free currency-api (two mirrors), no key. With them set, the
+     * quotes card shows these instead of crypto.
+     */
+    static final String[] FX = fxList(Config.FX);
+    static final String FX_BASE = Config.FX_BASE.trim().toUpperCase(Locale.ROOT);
+
+    private static String[] fxList(String config) {
+        List<String> out = new ArrayList<>();
+        for (String one : config.split(",")) {
+            String code = one.trim().toUpperCase(Locale.ROOT);
+            if (code.matches("[A-Z]{3}") && !out.contains(code) && out.size() < 4) out.add(code);
+        }
+        return out.toArray(new String[0]);
+    }
+
+    static boolean fxMode() {
+        return FX.length > 0;
+    }
+
+    /** Indexes in FX of the rates the user has on (their own switches in Home Settings, all on at first). */
+    static int[] fxActive() {
+        int n = 0;
+        int[] tmp = new int[FX.length];
+        for (int i = 0; i < FX.length; i++) if (Prefs.fx(i)) tmp[n++] = i;
+        return java.util.Arrays.copyOf(tmp, n);
+    }
+
+    static int fxCount() {
+        return fxMode() && Prefs.quotes() ? fxActive().length : 0;
+    }
+
+    private static String[] fxUrls(String date, String base) {
+        String path = "/v1/currencies/" + base.toLowerCase(Locale.ROOT) + ".json";
+        return new String[] {"https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@" + date + path,
+                "https://" + date + ".currency-api.pages.dev" + path};
+    }
     interface Listener { void onData(); }
 
     /** BTC, ETH and SOL; in Brazilian reais also the dollar (USDT/BRL), which Binance doesn't list for most currencies. */
     static int coinCount() {
-        return Prefs.quotes() ? active().length : 0;
+        return Prefs.quotes() && !fxMode() ? active().length : 0;
     }
 
     private static volatile int[] activeCoins;
@@ -72,6 +111,7 @@ final class HomeData {
     void settingsChanged() {
         pricesAt = 0;
         weatherAt = 0;
+        fxAt = 0;
     }
 
     static String coinName(int i) {
@@ -107,18 +147,28 @@ final class HomeData {
     final double[] prices = {Double.NaN, Double.NaN, Double.NaN, Double.NaN};
     /** 24 h change (%), in the same order. */
     final double[] changes = {Double.NaN, Double.NaN, Double.NaN, Double.NaN};
-    volatile long pricesAt, weatherAt;
+    volatile long pricesAt, weatherAt, fxAt;
+    /** Price of one of each FX currency in FX_BASE, and its change (%) since the day before. */
+    final double[] fxRates = new double[FX.length], fxChanges = new double[FX.length];
+    volatile String fxDate = "";
     volatile Weather weather = new Weather();
 
     private final SharedPreferences cache;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<Listener> listeners = new ArrayList<>();
-    private volatile boolean fetchingPrices, fetchingWeather;
+    private volatile boolean fetchingPrices, fetchingWeather, fetchingFx;
 
     private HomeData(Context c) {
         cache = c.getSharedPreferences("homedata", Context.MODE_PRIVATE);
+        java.util.Arrays.fill(fxRates, Double.NaN);
+        java.util.Arrays.fill(fxChanges, Double.NaN);
         try {
+            if (fxMode() && FX_BASE.equals(cache.getString("fxBase", ""))) {
+                String now = cache.getString("fx", null);
+                if (now != null) parseFx(now, cache.getString("fxPrev", null));
+                fxAt = cache.getLong("fxAt", 0);
+            }
             if (Prefs.quotes()) {
                 String p = cache.getString("prices", null);
                 if (p != null) parsePrices(p);
@@ -153,6 +203,29 @@ final class HomeData {
                     AppLog.w("prices: " + e.getMessage());
                 } finally {
                     fetchingPrices = false;
+                }
+            });
+        }
+        if (!fetchingFx && fxCount() > 0 && (now - fxAt > FX_EVERY || now < fxAt)) {
+            fetchingFx = true;
+            io.execute(() -> {
+                try {
+                    String latest = getFirst(fxUrls("latest", FX_BASE));
+                    String prev = null;
+                    try {
+                        prev = getFirst(fxUrls(dayBefore(new JSONObject(latest).optString("date")), FX_BASE));
+                    } catch (Exception e) {
+                        AppLog.w("rates, the day before: " + e.getMessage());
+                    }
+                    parseFx(latest, prev);
+                    fxAt = System.currentTimeMillis();
+                    cache.edit().putString("fx", latest).putString("fxPrev", prev).putString("fxBase", FX_BASE)
+                            .putLong("fxAt", fxAt).apply();
+                    notifyListeners();
+                } catch (Exception e) {
+                    AppLog.w("rates: " + e.getMessage());
+                } finally {
+                    fetchingFx = false;
                 }
             });
         }
@@ -195,6 +268,46 @@ final class HomeData {
             }
         }
         if (found == 0) pricesAt = 0;   // cached in another currency (config changed): fetch again
+    }
+
+    /** currency-api gives what one base unit buys; the card shows the other way round (one euro in forints). */
+    private void parseFx(String latest, String prev) throws Exception {
+        String base = FX_BASE.toLowerCase(Locale.ROOT);
+        JSONObject now = new JSONObject(latest);
+        JSONObject rates = now.getJSONObject(base);
+        JSONObject before = null;
+        if (prev != null) {
+            try { before = new JSONObject(prev).getJSONObject(base); } catch (Exception ignored) {}
+        }
+        for (int i = 0; i < FX.length; i++) {
+            String code = FX[i].toLowerCase(Locale.ROOT);
+            double r = rates.optDouble(code, Double.NaN);
+            fxRates[i] = r > 0 ? 1 / r : Double.NaN;
+            double p = before == null ? Double.NaN : before.optDouble(code, Double.NaN);
+            double was = p > 0 ? 1 / p : Double.NaN;
+            fxChanges[i] = was > 0 && !Double.isNaN(fxRates[i]) ? (fxRates[i] - was) / was * 100 : Double.NaN;
+        }
+        fxDate = now.optString("date", "");
+    }
+
+    /** "2026-10-19" → "2026-10-18". */
+    private static String dayBefore(String date) throws ParseException {
+        SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        f.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return f.format(new java.util.Date(f.parse(date).getTime() - 24 * 3600_000L));
+    }
+
+    /** The first of the mirrors that answers. */
+    private static String getFirst(String[] urls) throws IOException {
+        IOException last = null;
+        for (String u : urls) {
+            try {
+                return get(u);
+            } catch (IOException e) {
+                last = e;
+            }
+        }
+        throw last != null ? last : new IOException("no source");
     }
 
     private static Weather parseWeather(String body) throws Exception {
@@ -298,6 +411,58 @@ final class HomeData {
         return v >= 1000 ? String.format(locale(), symbol + "%,.0f", v) : String.format(locale(), symbol + "%.2f", v);
     }
 
+    /** One euro in forints: "362.80 Ft"; other bases with their own symbol. */
+    static String fxPrice(double v) {
+        if (Double.isNaN(v)) return "—";
+        String n = String.format(locale(), v >= 1000 ? "%,.0f" : "%.2f", v);
+        switch (FX_BASE) {
+            case "HUF": return n + " Ft";
+            case "USD": return "$" + n;
+            case "EUR": return "€" + n;
+            case "GBP": return "£" + n;
+            case "BRL": return "R$ " + n;
+            default: return n + " " + FX_BASE;
+        }
+    }
+
+    /** The currency's sign, for the round badge on its row. */
+    static String fxSymbol(String code) {
+        switch (code) {
+            case "EUR": return "€";
+            case "USD": return "$";
+            case "RUB": return "₽";
+            case "GBP": return "£";
+            case "JPY": case "CNY": return "¥";
+            case "CHF": return "Fr";
+            case "PLN": return "zł";
+            case "UAH": return "₴";
+            case "HUF": return "Ft";
+            case "BRL": return "R$";
+            default: return code.substring(0, 1);
+        }
+    }
+
+    static String fxName(String code) {
+        switch (code) {
+            case "EUR": return "Euro";
+            case "USD": return Ui.tr("Dólar", "US Dollar", "Dólar");
+            case "RUB": return Ui.tr("Rublo", "Russian Ruble", "Rublo");
+            case "GBP": return Ui.tr("Libra", "British Pound", "Libra");
+            case "CHF": return Ui.tr("Franco suíço", "Swiss Franc", "Franco suizo");
+            default: return code;
+        }
+    }
+
+    /** The rates' date, short: "19 Oct" (they change once a day). */
+    static String fxDay(String date) {
+        try {
+            SimpleDateFormat in = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+            return new SimpleDateFormat(Ui.en ? "d MMM" : "d 'de' MMM", Ui.locale()).format(in.parse(date));
+        } catch (ParseException e) {
+            return date;
+        }
+    }
+
     /** The weather in words, from Open-Meteo's WMO code. */
     static String condition(int code, boolean day) {
         if (code < 0) return "";
@@ -368,7 +533,7 @@ final class HomeData {
     }
 
     static String hour(long at) {
-        return Ui.en ? new SimpleDateFormat("h a", Locale.US).format(new java.util.Date(at))
+        return Ui.en ? new SimpleDateFormat(Ui.h24 ? "HH:mm" : "h a", Locale.US).format(new java.util.Date(at))
                 : new SimpleDateFormat(Ui.es ? "HH:mm" : "HH'h'", Ui.locale()).format(new java.util.Date(at));
     }
 

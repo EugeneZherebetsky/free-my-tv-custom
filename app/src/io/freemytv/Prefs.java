@@ -84,6 +84,10 @@ final class Prefs {
     static void setQuotes(boolean on) { put("quotes", on); }
 
     static boolean coin(int i) { return sp().getBoolean("coin" + i, true); }
+
+    /** The exchange rates (config fx), each on or off. */
+    static boolean fx(int i) { return sp().getBoolean("fx" + i, true); }
+    static void setFx(int i, boolean on) { put("fx" + i, on); }
     static void setCoin(int i, boolean on) { put("coin" + i, on); }
 
     // MARK: - Shelf
@@ -94,8 +98,19 @@ final class Prefs {
         if (v == null) return null;
         List<String> out = new ArrayList<>();
         for (String p : v.split(",")) if (!p.isEmpty()) out.add(p);
+        // Once: YouTube Music joins a shelf edited before it was offered (right after YouTube, if it's there).
+        if (!sp().getBoolean("ytmusicOffered", false)) {
+            sp().edit().putBoolean("ytmusicOffered", true).apply();
+            if (!out.contains(YT_MUSIC) && out.size() < HomeApps.MAX_SHELF) {
+                int at = out.indexOf("com.google.android.youtube.tv");
+                out.add(at >= 0 ? at + 1 : out.size(), YT_MUSIC);
+                setShelf(out);
+            }
+        }
         return out;
     }
+
+    private static final String YT_MUSIC = "com.google.android.youtube.tvmusic";
 
     static void setShelf(List<String> packages) {
         StringBuilder sb = new StringBuilder();

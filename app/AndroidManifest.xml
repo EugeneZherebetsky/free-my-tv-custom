@@ -15,6 +15,9 @@
     <queries>
         <package android:name="com.netflix.ninja" />
         <package android:name="com.google.android.youtube.tv" />
+        <package android:name="com.google.android.youtube.tvmusic" />
+        <!-- SystemUI's "start the screensaver now" (Back on the home screen). -->
+        <package android:name="com.android.systemui" />
         <package android:name="com.amazon.amazonvideo.livingroom" />
         <package android:name="com.disney.disneyplus" />
         <package android:name="com.wbd.stream" />
@@ -91,9 +94,24 @@
             </intent-filter>
         </activity>
 
+        <!-- Android 12+: in the :home process. Android 11 starts a screensaver's window in the app's main process and
+             crashes if the service is elsewhere, so there Screensaver11 (the same thing, in the main process) is used. -->
         <service
             android:name=".Screensaver"
             android:process=":home"
+            android:enabled="@bool/dream_in_home_process"
+            android:exported="true"
+            android:label="Free My TV"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".Screensaver11"
+            android:enabled="@bool/dream_in_main_process"
             android:exported="true"
             android:label="Free My TV"
             android:permission="android.permission.BIND_DREAM_SERVICE">
