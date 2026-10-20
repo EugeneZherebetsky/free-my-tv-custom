@@ -151,7 +151,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         try {
             glassShader = new RuntimeShader(Shaders.GLASS_TEXT);
             glassPaint.setShader(glassShader);
-        } catch (RuntimeException | LinkageError e) {   // Android 12: no AGSL
+        } catch (RuntimeException | LinkageError e) {   // Android 11-12: no AGSL
             AppLog.w("glass clock unavailable: " + e.getMessage());
             glassShader = null;
         }

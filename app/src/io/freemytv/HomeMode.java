@@ -38,6 +38,8 @@ final class HomeMode {
     static final String SETTINGS_ACTIVITY = PKG + "/" + PKG + ".SettingsActivity";
     static final String DREAM = PKG + "/" + PKG + ".Screensaver";
     static final String FREE = "free", ORIGINAL = "original";
+    /** Screensaver in Free My TV mode ("dream" in the state): ours, or the TV's own (Google Photos, Ambient mode). */
+    static final String DREAM_FREE = "free", DREAM_TV = "tv";
 
     /** Google TV's home screen: the fallback when the TV's own one wasn't recorded. */
     static final String GOOGLE_HOME = "com.google.android.apps.tv.launcherx/.home.HomeActivity";
@@ -70,7 +72,11 @@ final class HomeMode {
         "com.tcl.useragreement", "com.tcl.factory.view", "com.tcl.guard", "com.tcl.t_solo",
         "com.google.android.gms", "com.google.android.gsf", "com.android.vending", "com.google.android.apps.mediashell",
         "com.google.android.tv.remote.service", "com.google.android.inputmethod.latin", "com.google.android.webview",
-        "com.android.tv.settings", "com.android.systemui", "android", PKG));
+        "com.android.tv.settings", "com.android.systemui", "android", PKG,
+        // TCL on Android 11 (G05): system server, settings, remote, mic, keyboard, Wi-Fi
+        "com.tcl.system.server", "com.tcl.settings", "com.tcl.tcl_bt_rcu_service", "com.tcl.micmanager",
+        "com.tcl.keyhelp", "com.tcl.inputmethod.international", "com.tcl.accessibility", "com.tcl.android.webview",
+        "com.tcl.wifi.resources.overlay", "com.tcl.partnercustomizer"));
 
     /** One switch at a time (jobs can overlap: a boot check and a button press). */
     private static final Object RUN = new Object();
@@ -170,8 +176,12 @@ final class HomeMode {
             }
             String dream = s.optString("originalDream", "");
             if (dream.isEmpty()) dream = defaultDream(adb);
+            // The screensaver actually chosen can differ from the default (Android 11 Google TV: the old Backdrop is
+            // chosen, Ambient is the default); recorded once so Original puts back the one that was in use.
+            String dreamSetting = s.optString("originalDreamSetting", "");
+            if (dreamSetting.isEmpty()) dreamSetting = currentDream(adb);
             JSONObject latest = state(c);
-            latest.put("originalHome", home).put("originalDream", dream);
+            latest.put("originalHome", home).put("originalDream", dream).put("originalDreamSetting", dreamSetting);
             save(c, latest);
             // Turning off an app makes Android delete the Wi-Fi networks it saved (#14), and Original can't bring them
             // back. The TV's first setup usually saved the network: then stop here, before anything changes.
@@ -195,8 +205,10 @@ final class HomeMode {
             busy(c, Ui.tr("Trocando o Início e a tela de descanso…", "Switching the home screen and screensaver…"));
             check(adb.shell("cmd package set-home-activity " + HOME_ACTIVITY), "Success",
                     Ui.tr("o Android não aceitou o novo Início", "Android didn't accept the new home screen"));
-            adb.shell("settings put secure screensaver_components " + DREAM);
-            List<String> targets = targets(home, dream);
+            boolean tvDream = tvDream(latest);
+            if (tvDream) restoreDream(adb, dreamSetting);
+            else adb.shell("settings put secure screensaver_components " + DREAM);
+            List<String> targets = targets(home, tvDream ? "" : dream);
             Set<String> disabled = new HashSet<>(stringList(state(c), "disabled"));
             Set<String> present = packages(adb, "");
             int done = 0;
@@ -254,7 +266,7 @@ final class HomeMode {
             }
             busy(c, Ui.tr("Devolvendo o Início original…", "Restoring the original home screen…"));
             boolean homeOk = restoreHome(adb, home);
-            adb.shell("settings delete secure screensaver_components");
+            restoreDream(adb, s.optString("originalDreamSetting", ""));
             try {
                 remoteService(c, adb, false);
             } catch (IOException e) {
@@ -341,7 +353,8 @@ final class HomeMode {
                 boolean reverted = s.optBoolean("homeReverted");
                 String home = originalHome(s);
                 Set<String> wanted = new HashSet<>(stringList(s, "disabled"));
-                for (String pkg : targets(home, s.optString("originalDream", ""))) {
+                boolean tvDream = tvDream(s);
+                for (String pkg : targets(home, tvDream ? "" : s.optString("originalDream", ""))) {
                     if (!reverted || !(pkg.equals(packageOf(home)) || pkg.equals(GOOGLE_SETUP))) wanted.add(pkg);
                 }
                 Set<String> disabled = new HashSet<>(stringList(s, "disabled"));
@@ -360,7 +373,8 @@ final class HomeMode {
                     adb.shell("cmd package set-home-activity " + HOME_ACTIVITY);
                     fixed.add(Ui.tr("o Início", "the home screen"));
                 }
-                if (!adb.shell("settings get secure screensaver_components").contains(DREAM)) {
+                // With the TV's own screensaver, whatever is picked in the TV's settings stays.
+                if (!tvDream && !adb.shell("settings get secure screensaver_components").contains(DREAM)) {
                     adb.shell("settings put secure screensaver_components " + DREAM);
                     fixed.add(Ui.tr("a tela de descanso", "the screensaver"));
                 }
@@ -378,6 +392,79 @@ final class HomeMode {
                 notice(app, Ui.tr("A TV foi atualizada; o Free My TV continua igual.", "The TV was updated; Free My TV is still on."));
             }
         }
+    }
+
+    // MARK: - Screensaver choice
+
+    /** Asks the main process to change the screensaver (settings screen). Saved even in Original, used by the next switch. */
+    static void requestDream(Context c, String choice) {
+        ModeJob.schedule(c, ModeJob.DREAM, choice, 0);
+    }
+
+    static boolean tvDream(JSONObject s) {
+        return DREAM_TV.equals(s.optString("dream"));
+    }
+
+    /**
+     * Free My TV's screensaver or the TV's own. The TV's own: its screensaver apps back on and the screensaver that
+     * was in use before the switch (Google Photos lives there), then left alone. Ours: set, and the TV's off again.
+     */
+    static void applyDreamNow(Context c, String choice) {
+        synchronized (RUN) {
+            boolean tv = DREAM_TV.equals(choice);
+            JSONObject s = state(c);
+            try { s.put("dream", tv ? DREAM_TV : DREAM_FREE); } catch (JSONException ignored) {}
+            save(c, s);
+            if (!FREE.equals(s.optString("mode"))) return;   // used by the next switch to Free My TV
+            try (Adb adb = connect(c, s)) {
+                busy(c, Ui.tr("Trocando a tela de descanso…", "Changing the screensaver…", "Cambiando el protector de pantalla…"));
+                Set<String> disabled = new HashSet<>(stringList(state(c), "disabled"));
+                if (tv) {
+                    for (String pkg : dreamPackages(s)) {
+                        if (!disabled.contains(pkg)) continue;
+                        if (adb.shell("pm enable " + pkg).contains("new state: enabled")) disabled.remove(pkg);
+                    }
+                    restoreDream(adb, s.optString("originalDreamSetting", ""));
+                } else {
+                    adb.shell("settings put secure screensaver_components " + DREAM);
+                    String pkg = packageOf(s.optString("originalDream", ""));
+                    if (pkg != null && !pkg.equals(PKG) && !PROTECTED.contains(pkg) && !wifiOwners(adb).contains(pkg)
+                            && packages(adb, "").contains(pkg)
+                            && adb.shell("pm disable-user --user 0 " + pkg).contains("disabled-user")) disabled.add(pkg);
+                }
+                JSONObject latest = state(c);
+                latest.put("disabled", new JSONArray(sorted(disabled)));
+                save(c, latest);
+                notice(c, tv ? Ui.tr("Tela de descanso: a da TV (Google Fotos, modo Ambiente).",
+                        "Screensaver: the TV's own (Google Photos, Ambient mode).",
+                        "Protector de pantalla: el del TV (Google Fotos, modo Ambiente).")
+                        : Ui.tr("Tela de descanso: a do Free My TV.", "Screensaver: Free My TV's.",
+                        "Protector de pantalla: el de Free My TV."));
+                done(c, null);
+            } catch (Exception e) {
+                done(c, Ui.tr("Não deu para trocar a tela de descanso: ", "Couldn't change the screensaver: ",
+                        "No se pudo cambiar el protector de pantalla: ") + e.getMessage());
+            }
+        }
+    }
+
+    /** Puts back the screensaver recorded before the switch, or the system's default if none was. */
+    private static void restoreDream(Adb adb, String setting) throws IOException {
+        if (DREAMS.matcher(setting).matches()) adb.shell("settings put secure screensaver_components " + setting);
+        else adb.shell("settings delete secure screensaver_components");
+    }
+
+    /** The TV's screensaver apps: the default one and the one in use before the switch. */
+    private static Set<String> dreamPackages(JSONObject s) {
+        Set<String> out = new HashSet<>();
+        String def = packageOf(s.optString("originalDream", ""));
+        if (def != null) out.add(def);
+        for (String one : s.optString("originalDreamSetting", "").split(",")) {
+            String pkg = packageOf(one.trim());
+            if (pkg != null) out.add(pkg);
+        }
+        out.remove(PKG);
+        return out;
     }
 
     /** What to turn off: the TV's own home screen and screensaver, Google TV's recovery home, and the lists above. */
@@ -445,6 +532,15 @@ final class HomeMode {
     private static String defaultDream(Adb adb) throws IOException {
         String d = adb.shell("settings get secure screensaver_default_component").trim();
         return d.contains("/") && !d.startsWith(PKG + "/") ? d : "";
+    }
+
+    /** One or more "package/service" names, comma-separated: the only thing put back into the shell command. */
+    private static final Pattern DREAMS = Pattern.compile("[\\w.]+/[\\w.$]+(,[\\w.]+/[\\w.$]+)*");
+
+    /** The screensaver chosen now (screensaver_components), or "" if it's unset, ours or unexpected. */
+    private static String currentDream(Adb adb) throws IOException {
+        String d = adb.shell("settings get secure screensaver_components").trim();
+        return DREAMS.matcher(d).matches() && !d.contains(PKG + "/") ? d : "";
     }
 
     private static String packageOf(String component) {

@@ -110,7 +110,8 @@ public class SettingsActivity extends Activity {
     }
 
     static final class SettingsView extends View implements Choreographer.FrameCallback {
-        private static final int MAIN = 0, HOME_CHOICE = 1, HOME_SETTINGS = 2, REMOTE_KEYS = 3, PICKER = 4, SHELF_EDIT = 5;
+        private static final int MAIN = 0, HOME_CHOICE = 1, HOME_SETTINGS = 2, REMOTE_KEYS = 3, PICKER = 4, SHELF_EDIT = 5,
+                DREAM_CHOICE = 6;
         private static final float LIST_ROW_H = 68, LIST_ROW_GAP = 6;
         private static final int PICK_VISIBLE = 9;
         private static final float LIST_X = 1000, LIST_R = 1824, LIST_TOP = 186, ROW_H = 74, ROW_GAP = 8, CHOICE_H = 104;
@@ -203,7 +204,7 @@ public class SettingsActivity extends Activity {
                                 : freeActive() ? "Free My TV" : Ui.tr("Original", "Original");
                         return Ui.tr("Início, ", "Home Screen, ") + value;
                     }
-                    String[] names = {Ui.tr("Tela de Descanso, ver agora", "Screensaver, preview"), Ui.tr("Ajustes do Início", "Home Settings"),
+                    String[] names = {Ui.tr("Tela de Descanso, ", "Screensaver, ", "Protector de pantalla, ") + dreamValue(), Ui.tr("Ajustes do Início", "Home Settings"),
                             Ui.tr("Prateleira", "Shelf"), Ui.tr("Botões do Controle", "Remote Buttons"), Ui.tr("Ajustes da TV", "TV Settings")};
                     return row - 1 < names.length ? names[row - 1] : "";
                 }
@@ -212,6 +213,12 @@ public class SettingsActivity extends Activity {
                             : "Original, " + Ui.tr("o Início de fábrica da TV", "the TV's factory home screen");
                     boolean inUse = (row == 0) == freeActive();
                     return name + (inUse ? Ui.tr(". Em uso", ". In use") : "") + ", " + (row + 1) + Ui.tr(" de 2", " of 2");
+                }
+                case DREAM_CHOICE: {
+                    String[][] options = dreamOptions();
+                    if (row >= options.length) return "";
+                    boolean inUse = row < 2 && (row == 1) == HomeMode.tvDream(state);
+                    return options[row][0] + ", " + options[row][1] + (inUse ? Ui.tr(". Em uso", ". In use") : "");
                 }
                 case HOME_SETTINGS:
                 case REMOTE_KEYS: {
@@ -243,7 +250,7 @@ public class SettingsActivity extends Activity {
             if (screen == MAIN) {
                 top = LIST_TOP + row * (ROW_H + ROW_GAP);
                 height = ROW_H;
-            } else if (screen == HOME_CHOICE) {
+            } else if (screen == HOME_CHOICE || screen == DREAM_CHOICE) {
                 top = LIST_TOP + 20 + row * (CHOICE_H + ROW_GAP);
                 height = CHOICE_H;
             } else {
@@ -322,6 +329,7 @@ public class SettingsActivity extends Activity {
             switch (screen) {
                 case MAIN: return 6;
                 case HOME_CHOICE: return 2;
+                case DREAM_CHOICE: return 3;
                 case HOME_SETTINGS: return settingLabels().length;
                 case PICKER: return Math.min(PICK_VISIBLE, pickLabels.size());
                 case SHELF_EDIT: return Math.min(PICK_VISIBLE, shelfRows.size());
@@ -353,7 +361,7 @@ public class SettingsActivity extends Activity {
             c.drawText(Ui.tr("Início e tela de descanso da TV", "Your TV's home screen and screensaver"), cx, 660 * k, subtitle);
             c.drawText(versionName(getContext()), cx, 704 * k, version);
 
-            if (screen == MAIN) drawMain(c, seconds); else if (screen == HOME_CHOICE) drawChoice(c); else if (screen == PICKER) drawPicker(c); else if (screen == SHELF_EDIT) drawShelfEditor(c); else drawList(c);
+            if (screen == MAIN) drawMain(c, seconds); else if (screen == HOME_CHOICE) drawChoice(c); else if (screen == DREAM_CHOICE) drawDreamChoice(c); else if (screen == PICKER) drawPicker(c); else if (screen == SHELF_EDIT) drawShelfEditor(c); else drawList(c);
         }
 
         private void drawMain(Canvas c, float seconds) {
@@ -363,7 +371,7 @@ public class SettingsActivity extends Activity {
             String[] labels = {Ui.tr("Início", "Home Screen"), Ui.tr("Tela de Descanso", "Screensaver"),
                     Ui.tr("Ajustes do Início", "Home Settings"), Ui.tr("Prateleira", "Shelf"),
                     Ui.tr("Botões do Controle", "Remote Buttons"), Ui.tr("Ajustes da TV", "TV Settings")};
-            String[] values = {working ? "" : mode, Ui.tr("Ver agora", "Preview"), "", "", "", ""};
+            String[] values = {working ? "" : mode, dreamValue(), "", "", "", ""};
             for (int i = 0; i < 6; i++) {
                 float y = (LIST_TOP + i * (ROW_H + ROW_GAP)) * k;
                 rowRect.set(LIST_X * k, y, LIST_R * k, y + ROW_H * k);
@@ -517,6 +525,47 @@ public class SettingsActivity extends Activity {
                     (LIST_TOP + 20 + 2 * (CHOICE_H + ROW_GAP) + 40) * k, hint);
         }
 
+        /** "Free My TV" or "The TV's own": the screensaver used in Free My TV mode. */
+        private String dreamValue() {
+            return HomeMode.tvDream(state) ? Ui.tr("A da TV", "The TV's own", "El del TV") : "Free My TV";
+        }
+
+        private static String[][] dreamOptions() {
+            return new String[][] {
+                    {"Free My TV", Ui.tr("Fotos das recomendações e um relógio de vidro", "Photos of the picks and a glass clock",
+                            "Fotos de las recomendaciones y un reloj de cristal")},
+                    {Ui.tr("A da TV", "The TV's own", "El del TV"), Ui.tr("Google Fotos e o modo Ambiente", "Google Photos and Ambient mode",
+                            "Google Fotos y el modo Ambiente")},
+                    {Ui.tr("Ver agora", "Preview"), Ui.tr("A tela de descanso do Free My TV, aqui mesmo", "Free My TV's screensaver, right here",
+                            "El protector de pantalla de Free My TV, aquí mismo")}};
+        }
+
+        /** Screensaver choice: ours or the TV's own (a check on the one in use), and the preview of ours. */
+        private void drawDreamChoice(Canvas c) {
+            Paint heading = Ui.text(Ui.displaySemibold, 34 * k, 0xFFFFFFFF);
+            c.drawText(Ui.tr("Tela de Descanso", "Screensaver"), LIST_X * k + 30 * k, (LIST_TOP - 24) * k, heading);
+            String[][] options = dreamOptions();
+            int current = HomeMode.tvDream(state) ? 1 : 0;
+            for (int i = 0; i < options.length; i++) {
+                float y = (LIST_TOP + 20 + i * (CHOICE_H + ROW_GAP)) * k;
+                rowRect.set(LIST_X * k, y, LIST_R * k, y + CHOICE_H * k);
+                float f = drawRowBackground(c, i);
+                rowLabel.setColor(blend(0xF2FFFFFF, INK, f));
+                rowSub.setColor(blend(0x8CFFFFFF, 0x991C1C1E, f));
+                c.drawText(options[i][0], rowRect.left + 30 * k, rowRect.top + 44 * k, rowLabel);
+                c.drawText(options[i][1], rowRect.left + 30 * k, rowRect.top + 80 * k, rowSub);
+                if (i == current) {
+                    float cw = Symbols.width(getContext(), "check", 26 * k);
+                    Symbols.draw(getContext(), c, "check", rowRect.right - 30 * k - cw / 2, rowRect.centerY(), 26 * k, blend(0xFFFFFFFF, INK, f));
+                }
+            }
+            Paint hint = Ui.text(Ui.regular, 23 * k, 0x8CFFFFFF);
+            c.drawText(Ui.tr("A da TV: escolha o Google Fotos em Ajustes da TV → Sistema → Modo Ambiente.",
+                    "The TV's own: pick Google Photos in TV Settings → System → Ambient mode.",
+                    "El del TV: elige Google Fotos en Ajustes del TV → Sistema → Modo Ambiente."), LIST_X * k + 30 * k,
+                    (LIST_TOP + 20 + options.length * (CHOICE_H + ROW_GAP) + 40) * k, hint);
+        }
+
         private static int blend(int a, int b, float f) {
             int aa = a >>> 24, ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
             int ba = b >>> 24, br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
@@ -593,7 +642,8 @@ public class SettingsActivity extends Activity {
                                 focus = pickFor - 1;
                                 screen = REMOTE_KEYS;
                             } else {
-                                focus = screen == HOME_SETTINGS ? 2 : screen == SHELF_EDIT ? 3 : screen == REMOTE_KEYS ? 4 : 0;
+                                focus = screen == HOME_SETTINGS ? 2 : screen == SHELF_EDIT ? 3 : screen == REMOTE_KEYS ? 4
+                                        : screen == DREAM_CHOICE ? 1 : 0;
                                 screen = MAIN;
                             }
                         }
@@ -883,6 +933,20 @@ public class SettingsActivity extends Activity {
                 }
                 screen = MAIN;
                 focus = 0;
+            } else if (screen == DREAM_CHOICE) {
+                screen = MAIN;
+                if (focus == 2) {
+                    focus = 1;
+                    pause();
+                    activity.showPreview();
+                } else {
+                    String want = focus == 1 ? HomeMode.DREAM_TV : HomeMode.DREAM_FREE;
+                    if ((focus == 1) != HomeMode.tvDream(state) && !busy()) {
+                        HomeMode.requestDream(c, want);
+                        if (freeActive()) pendingAt = SystemClock.uptimeMillis();
+                    }
+                    focus = 1;
+                }
             } else if (screen == PICKER) {
                 int at = pickScroll + focus;
                 Prefs.setKeyApp(Prefs.KEYS[pickFor - 1], appPkgs.get(at));
@@ -903,8 +967,8 @@ public class SettingsActivity extends Activity {
                 screen = HOME_CHOICE;
                 focus = freeActive() ? 0 : 1;
             } else if (focus == 1) {
-                pause();
-                activity.showPreview();
+                screen = DREAM_CHOICE;
+                focus = HomeMode.tvDream(state) ? 1 : 0;
             } else if (focus == 2) {
                 screen = HOME_SETTINGS;
                 focus = 0;
