@@ -125,8 +125,9 @@ final class Prefs {
     }
 
     private static final String YT_MUSIC = "com.google.android.youtube.tvmusic";
-    /** YouTube Music, VLC, Plex and BiglyBT (torrents). */
-    private static final String[] ADD_ONCE = {YT_MUSIC, "org.videolan.vlc", "com.plexapp.android", "com.biglybt.android.client"};
+    /** YouTube Music, VLC, Plex, BiglyBT (torrents) and Telekom TV GO. */
+    private static final String[] ADD_ONCE = {YT_MUSIC, "org.videolan.vlc", "com.plexapp.android", "com.biglybt.android.client",
+            "hu.telekom.telekomtv"};
 
     static void setShelf(List<String> packages) {
         StringBuilder sb = new StringBuilder();

@@ -16,6 +16,8 @@
         <package android:name="com.netflix.ninja" />
         <package android:name="com.google.android.youtube.tv" />
         <package android:name="com.google.android.youtube.tvmusic" />
+        <!-- Telekom TV GO: a phone app (no TV version), so not found through LEANBACK_LAUNCHER below. -->
+        <package android:name="hu.telekom.telekomtv" />
         <!-- SystemUI's "start the screensaver now" (Back on the home screen). -->
         <package android:name="com.android.systemui" />
         <package android:name="com.amazon.amazonvideo.livingroom" />
